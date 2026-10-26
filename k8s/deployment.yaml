@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: cluster-game
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: cluster-game
+
+  template:
+    metadata:
+      labels:
+        app: cluster-game
+
+    spec:
+      automountServiceAccountToken: false
+
+      containers:
+        - name: game
+          image: build-the-cluster:latest
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - containerPort: 8080
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
