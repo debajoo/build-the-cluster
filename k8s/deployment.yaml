@@ -21,7 +21,7 @@ spec:
 
       containers:
         - name: game
-          image: build-the-cluster:latest
+          image: debajoo/build-the-cluster:v1
           imagePullPolicy: IfNotPresent
 
           ports:
