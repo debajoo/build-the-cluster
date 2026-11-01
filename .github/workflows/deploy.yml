@@ -1,0 +1,91 @@
+name: Test, build and deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cluster-game-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image for testing
+        run: docker build -t game-test .
+
+      - name: Test website and health endpoint
+        run: |
+          set -euo pipefail
+          docker run -d --name game-test \
+            -p 127.0.0.1:18080:8080 game-test
+
+          trap 'docker logs game-test; docker rm -f game-test' EXIT
+
+          curl --fail --retry 10 --retry-connrefused \
+            --retry-delay 2 --retry-all-errors \
+            --max-time 5 http://127.0.0.1:18080/healthz
+
+          curl --fail --max-time 10 \
+            http://127.0.0.1:18080/ -o /tmp/game.html
+          test -s /tmp/game.html
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: debajoo
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish release
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: debajoo/build-the-cluster:${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.ORACLE_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/oracle_key
+          chmod 600 ~/.ssh/oracle_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy and verify
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          ssh -i ~/.ssh/oracle_key \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=20 \
+            "ubuntu@$ORACLE_HOST" \
+            "sudo -n kubectl -n default set image \
+               deployment/cluster-game \
+               game=debajoo/build-the-cluster:$IMAGE_TAG &&
+             sudo -n kubectl -n default rollout status \
+               deployment/cluster-game --timeout=180s"
